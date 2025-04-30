@@ -766,8 +766,8 @@ async fn main() -> Result<()> {
     fn print_type_of<T>(_: &T) {
         debug!("{}", std::any::type_name::<T>());
     }
-    debug!("Post-Quantum (PQ) keypair generated with MLDSA-87 algorithm");
-    debug!("PQ public key length: {}", pq_pk_vec.len()); // 2592 B
+    debug!("Post-Quantum keypair generated with MLDSA-87 algorithm");
+    debug!("MLDSA-87 public key length: {}", pq_pk_vec.len()); // 2592 B
     // debug!("PQ public key str length: {}", pq_pk_str.len());
     // debug!("PQ public key der length: {}", pq_pk_der.len());
     // debug!("PQ public key u8 length: {}", pq_pk_u8.len());
@@ -876,8 +876,8 @@ async fn main() -> Result<()> {
         //info!("AUTH TAG: {}", auth_tag);
         let challenge_sig = pq_priv_key.sign(&auth_tag.as_bytes()).unwrap().to_vec();
         // print_type_of(&challenge_sig);
-        info!("Computed PQ signature over auth tag");
-        debug!("Size of PQ signature over auth tag: {} B", challenge_sig.len()); // should be 4627 B for MLdsa-87
+        info!("Computed mldsa-87 signature over auth tag");
+        debug!("Size of mldsa-87 signature over auth tag: {} B", challenge_sig.len()); // should be 4627 B for MLdsa-87
        // info!("PQ SIGNATURE OVER AUTH TAG: {:?}", challenge_sig);
         registrar_agent::do_activate_agent(
             config.agent.registrar_ip.as_ref(),

@@ -472,8 +472,8 @@ pub async fn integrity(
 
     // Printing each field
     info!("Size of quote = {} bytes", size_of::<PQquote>().to_string());
-    info!("Size of PQ signature = {} bytes", pq_quote.sign_sphincs_len.to_string());
-    info!("PQ Key Length = {} bytes", pq_quote.pq_key_len.to_string());
+    info!("Size of MLDSA-87 signature = {} bytes", pq_quote.sign_sphincs_len.to_string());
+    info!("MLDSA-87 Key Length = {} bytes", pq_quote.pq_key_len.to_string());
     info!("Quote Length = {} bytes", pq_quote.quote_len.to_string());
     let response = JsonWrapper::success(pq_quote);
     info!("GET integrity quote returning 200 response");

@@ -190,7 +190,7 @@ pub(crate) async fn do_register_agent(
         pq_key: pq_key,
     };
 
-    debug!("Send PQ public key to the registrar");
+    debug!("Send MLDSA-87 public key to the registrar");
 
     let remote_ip = match registrar_ip.parse::<IpAddr>() {
         Ok(addr) => {
