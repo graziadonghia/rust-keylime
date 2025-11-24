@@ -18,6 +18,8 @@ use std::{
     fs::{read, read_to_string},
     io::{Read, Seek},
 };
+use std::fs::OpenOptions;
+use std::io::Write;
 use tss_esapi::structures::PcrSlot;
 
 use std::os::raw::{c_char, c_uchar, c_ulong};
@@ -71,8 +73,8 @@ pub(crate) struct KeylimeQuote {
 
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub(crate) struct PQquote {
-    pub sign_sphincs: Vec<u8>, 
-    pub sign_sphincs_len: usize,
+    pub pq_wrap_signature: Vec<u8>, 
+    pub pq_wrap_signature_len: usize,
     pub pq_key: Vec<u8>, 
     pub pq_key_len: usize,
     pub hash_alg_sphincs: String,
@@ -89,6 +91,49 @@ pub(crate) struct PQquote {
     pub mb_measurement_list: Option<String>, 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ima_measurement_list_entry: Option<u64>, 
+}
+
+// function to send quote to kernel for PQ wrap
+fn get_pq_signature_for_quote(quote_str: &str) -> Result<Vec<u8>, KeylimeError> {
+    const DEV_PATH: &str = "/dev/qubip.quote";
+    const SIG_PATH: &str = "/proc/qubip_pq_quote.sig.bin";
+
+    // 1) Write the quote to /dev/qubip.quote (kernel signs it)
+    let mut dev = OpenOptions::new()
+        .write(true)
+        .open(DEV_PATH)
+        .map_err(|e| {
+            KeylimeError::Other(format!(
+                "FATAL: cannot open {} for PQ wrapping – kernel module missing or wrong permissions: {}",
+                DEV_PATH, e
+            ))
+    })?;
+
+    dev.write_all(quote_str.as_bytes())
+        .map_err(|e| {
+            KeylimeError::Other(format!(
+                "FATAL: Failed to write TPM quote to {} - kernel module may be unloaded: {}",
+                DEV_PATH, e
+            ))
+        })?;
+
+    // 2) Read the resulting PQ signature from /proc/qubip_pq_quote.sig.bin
+    let sig = read(SIG_PATH).map_err(|e| {
+        KeylimeError::Other(format!(
+            "FATAL: Failed to read PQ signature from {} - module not functioning: {}",
+            SIG_PATH, e
+        ))
+    })?;
+
+    if sig.is_empty() {
+        return Err(KeylimeError::Other(format!(
+            "FATAL: PQ signature from {} is empty – invalid module response",
+            SIG_PATH
+        )));
+    }
+
+    debug!("PQ signature length: {} bytes", sig.len());
+    Ok(sig)
 }
 
 // This is a Quote request from the tenant, which does not check
@@ -179,37 +224,23 @@ pub async fn identity(
     fn print_type_of<T>(_: &T) {
         debug!("{}", std::any::type_name::<T>());
     }
-    //let pq_priv_key_cstring: *const u8 = data.pq_priv_key.as_ptr();
-    let pq_priv_key_der = &data.pq_priv_key;
-    print_type_of(&pq_priv_key_der);
-    // debug!("------BEGIN PRIVATE KEY-----");
-    // debug!("{:?}", pq_priv_key_der);
-    // debug!("-----END PRIVATE KEY--------");
-    // let oid = DsaAlgorithm::MlDsa87.get_oid();
+    let pq_sig = match get_pq_signature_for_quote(&quote.quote) {
+        Ok(sig) => sig,
+        Err(e) => {
+            error!("Kernel PQ-wrap module failure: {:?}", e);
+            return HttpResponse::InternalServerError().json(
+                JsonWrapper::error(
+                    500,
+                    format!("Critical error: unable to perform PQ wrap – {}", e),
+                ),
+            );
+        }
+    };
 
-    // match PrivateKey::new(&oid, &pq_priv_key_vec, None) {
-    //     Ok(private_key) => {
-    //         println!("Private key created successfully!");
-    //         // Use private_key here
-    //     }
-    //     Err(e) => {
-    //         eprintln!("Failed to create private key: {:?}", e);
-    //     }
-    // }
-    //info!("PQ private key type: {}", pq_priv_key);
 
-    // PQ signature
-    //   let result = unsafe {
-    //   sign_with_sphincs(quote_ptr, quote.quote.len(),pq_priv_key_cstring,data.pq_priv_key_len) 
-
-    //   };
-    
-          
-    let pq_priv_key = PrivateKey::from_der(&data.pq_priv_key).unwrap();
-    let sig_sphincs = pq_priv_key.sign(quote.quote.as_bytes()).unwrap();
     let pq_quote = PQquote {
-        sign_sphincs: sig_sphincs.clone(),
-        sign_sphincs_len: sig_sphincs.len(),
+        pq_wrap_signature: pq_sig.clone(),
+        pq_wrap_signature_len: pq_sig.len(),
         pq_key: data.pq_pub_key.to_vec(),
         pq_key_len: data.pq_pub_key_len,
         hash_alg_sphincs: "shake_256".to_string(),
@@ -224,7 +255,7 @@ pub async fn identity(
         ima_measurement_list_entry: quote.ima_measurement_list_entry,
     };
     // Log the entire quote content
-    //info!("PQ signature: {:?}", pq_quote.sign_sphincs);
+    //info!("PQ signature: {:?}", pq_quote.pq_wrap_signature);
     let response = JsonWrapper::success(pq_quote);
     info!("GET integrity quote returning 200 response");
     HttpResponse::Ok().json(response)
@@ -442,14 +473,23 @@ pub async fn integrity(
         ..id_quote
     };
 
-    let pq_priv_key_der = &data.pq_priv_key;
-    let pq_priv_key = PrivateKey::from_der(pq_priv_key_der).unwrap();
-    let sig_sphincs = pq_priv_key.sign(quote.quote.as_bytes()).unwrap();
+    let pq_sig = match get_pq_signature_for_quote(&quote.quote) {
+        Ok(sig) => sig,
+        Err(e) => {
+            debug!("Unable to retrieve PQ signature for quote: {:?}", e);
+            return HttpResponse::InternalServerError().json(
+                JsonWrapper::error(
+                    500,
+                    "Unable to retrieve quote".to_string(),
+                ),
+            );
+        }
+    };
 
 
     let pq_quote = PQquote {
-        sign_sphincs: sig_sphincs.clone(),
-        sign_sphincs_len: sig_sphincs.len(),
+        pq_wrap_signature: pq_sig.clone(),
+        pq_wrap_signature_len: pq_sig.len(),
         pq_key: data.pq_pub_key.to_vec(),
         pq_key_len: data.pq_pub_key.len(),
         hash_alg_sphincs: "shake_256".to_string(),
@@ -463,16 +503,9 @@ pub async fn integrity(
         mb_measurement_list: quote.mb_measurement_list.clone(),
         ima_measurement_list_entry: quote.ima_measurement_list_entry,
     };
-
-    // Log the entire quote content
-    //info!("Content of ima measurement list: {:?}", pq_quote.ima_measurement_list);
-    // info!("Content of ima measurement list entry: {:?}", pq_quote.ima_measurement_list_entry);
-    // info!("Content of measured boot measurement list: {:?}", pq_quote.mb_measurement_list);
-
-
     // Printing each field
     info!("Size of quote = {} bytes", size_of::<PQquote>().to_string());
-    info!("Size of MLDSA-87 signature = {} bytes", pq_quote.sign_sphincs_len.to_string());
+    info!("Size of MLDSA-87 signature = {} bytes", pq_quote.pq_wrap_signature_len.to_string());
     info!("MLDSA-87 Key Length = {} bytes", pq_quote.pq_key_len.to_string());
     info!("Quote Length = {} bytes", pq_quote.quote_len.to_string());
     let response = JsonWrapper::success(pq_quote);

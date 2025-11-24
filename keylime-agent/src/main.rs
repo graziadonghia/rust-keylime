@@ -106,16 +106,6 @@ extern "C" {
     fn generate_sphincs_keypair() -> KeypairResult;
 }
 
-// Here used to sign the challenge during activate credentials
-#[link(name = "sign_with_sphincs")]
-extern "C" {
-    fn sign_with_sphincs(
-        quote: *const u8,
-        quote_len: usize,
-        pq_priv_key: *const u8,
-        pq_priv_key_len: usize,
-    ) -> SignatureResult;
-}
 
 #[repr(C)]
 struct KeypairResult {
@@ -163,8 +153,6 @@ pub struct QuoteData {
     secure_mount: PathBuf,
     pq_pub_key: Vec<u8>,
     pq_pub_key_len: usize,
-    pq_priv_key: Vec<u8>,
-    pq_priv_key_len: usize,
 
 }
 
@@ -200,12 +188,12 @@ async fn main() -> Result<()> {
     let ima_ml_path = ima_ml_path_get(&config.agent.ima_ml_path);
 
     // check whether anyone has overridden the default
-    if ima_ml_path.as_os_str() != config::DEFAULT_IMA_ML_PATH {
-        warn!(
-            "IMA measurement list location override: {}",
-            ima_ml_path.display()
-        );
-    }
+    // if ima_ml_path.as_os_str() != config::DEFAULT_IMA_ML_PATH {
+    //     warn!(
+    //         "IMA measurement list location override: {}",
+    //         ima_ml_path.display()
+    //     );
+    // }
 
     // check IMA logfile exists & accessible
     let ima_ml_file = if ima_ml_path.exists() {
@@ -752,44 +740,34 @@ async fn main() -> Result<()> {
     }
 
     
-    // PQ key generation with quantcrypt crate
-    let mut key_generator = DsaKeyGenerator::new(DsaAlgorithm::MlDsa87);
-    let (pq_pub_key, pq_priv_key) = key_generator.generate().unwrap();
-    // pq_pub_key is dropped at the end of current scope
-    // for MLDSA-87 the expected public key is 2592 B
-    let pq_sk_der = pq_priv_key.to_der().unwrap();
-    let pq_pk_der = pq_pub_key.to_der().unwrap(); // 2614 B
-    let pq_pk_pem = pq_pub_key.to_pem().unwrap(); // 3595 B
-    let pq_pk_u8 = pq_pub_key.get_key(); //2592 B
-    let pq_pk_vec: Vec<u8> = pq_pub_key.get_key().to_vec(); // Own the bytes
-    let pq_pk_str = pq_pub_key.to_pem().unwrap(); // 3595 B
-    fn print_type_of<T>(_: &T) {
-        debug!("{}", std::any::type_name::<T>());
+    // PQ public key retrieval from binary file /proc/qubip_mldsa87.pub.bin (ALREADY GENERATED)
+    let pq_pub_path = Path::new("/proc/qubip_mldsa87.pub.bin");
+    let mut pq_pk_file = fs::File::open(pq_pub_path).map_err(|e| {
+        Error::Configuration(format!(
+            "Failed to open PQ public key file at {}: {}",
+            pq_pub_path.display(),
+            e
+        ))
+    })?;
+    let mut pq_pk_vec = Vec::new();
+    let bytes_read = pq_pk_file.read_to_end(&mut pq_pk_vec).map_err(|e| {
+        Error::Configuration(format!(
+            "Failed to read PQ public key file at {}: {}",
+            pq_pub_path.display(),
+            e
+        ))
+    })?;
+    if bytes_read == 0 {
+        return Err(Error::Configuration(format!(
+            "PQ public key file at {} is empty",
+            pq_pub_path.display()
+        )));
     }
-    debug!("Post-Quantum keypair generated with MLDSA-87 algorithm");
-    debug!("MLDSA-87 public key length: {}", pq_pk_vec.len()); // 2592 B
-    // debug!("PQ public key str length: {}", pq_pk_str.len());
-    // debug!("PQ public key der length: {}", pq_pk_der.len());
-    // debug!("PQ public key u8 length: {}", pq_pk_u8.len());
-    // debug!("PQ public key pem length: {}", pq_pk_pem.len());
-    // debug!("PQ PUBLIC KEY AS STR");
-    // debug!("-------------------------");
-    // debug!("{:?}", pq_pk_str);
-    // debug!("PQ PUBLIC KEY AS VEC<U8>");
-    // debug!("-------------------------");
-    // debug!("{:?}", pq_pk_vec);
-    // debug!("PQ PUBLIC KEY AS DER");
-    // debug!("-------------------------");
-    // debug!("{:?}", pq_pk_der);
-    // debug!("PQ PUBLIC KEY AS PEM");
-    // debug!("-------------------------");
-    // debug!("{:?}", pq_pk_pem);
     
-    // print_type_of(&pq_priv_key);
-    // debug!("PQ Private KEY");
-    // debug!("------BEGIN PRIVATE KEY-----");
-    // debug!("{:?}", pq_sk_der);
-    // debug!("-----END PRIVATE KEY--------");
+    debug!("Loaded PQ public key from {}", pq_pub_path.display());
+    debug!("Size of PQ public key: {} B", pq_pk_vec.len()); // should be 2592 B for MLdsa-87
+    //debug!("PQ Public Key: {:?}", pq_pk_vec);
+
 
 
     {
@@ -874,10 +852,10 @@ async fn main() -> Result<()> {
         let auth_tag = hex::encode(&auth_tag);
 
         //info!("AUTH TAG: {}", auth_tag);
-        let challenge_sig = pq_priv_key.sign(&auth_tag.as_bytes()).unwrap().to_vec();
+        let challenge_sig = auth_tag.as_bytes();
         // print_type_of(&challenge_sig);
-        info!("Computed mldsa-87 signature over auth tag");
-        debug!("Size of mldsa-87 signature over auth tag: {} B", challenge_sig.len()); // should be 4627 B for MLdsa-87
+        // info!("Computed mldsa-87 signature over auth tag");
+        // debug!("Size of mldsa-87 signature over auth tag: {} B", challenge_sig.len()); // should be 4627 B for MLdsa-87
        // info!("PQ SIGNATURE OVER AUTH TAG: {:?}", challenge_sig);
         registrar_agent::do_activate_agent(
             config.agent.registrar_ip.as_ref(),
@@ -962,8 +940,6 @@ async fn main() -> Result<()> {
         secure_mount: PathBuf::from(&mount),
         pq_pub_key: pq_pk_vec,
         pq_pub_key_len: 1024,
-        pq_priv_key: pq_sk_der, 
-        pq_priv_key_len: 1024,
     });
 
     let actix_server =
