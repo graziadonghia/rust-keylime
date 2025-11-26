@@ -51,6 +51,11 @@ use actix_web::{dev::Service, http, middleware, rt, web, App, HttpServer};
 use base64::{engine::general_purpose, Engine as _};
 use clap::{Arg, Command as ClapApp};
 use common::*;
+use std::fs::OpenOptions;
+use std::{
+    fs::{read, read_to_string},
+    io::Seek,
+};
 use error::{Error, Result};
 use futures::{
     future::{ok, TryFutureExt},
@@ -763,10 +768,12 @@ async fn main() -> Result<()> {
             pq_pub_path.display()
         )));
     }
-    
+    // should be a string with the algorithm name
+    let pq_algorithm = "ML-DSA-87";
+    debug!("PQ Algorithm: {:?}", pq_algorithm);
     debug!("Loaded PQ public key from {}", pq_pub_path.display());
     debug!("Size of PQ public key: {} B", pq_pk_vec.len()); // should be 2592 B for MLdsa-87
-    //debug!("PQ Public Key: {:?}", pq_pk_vec);
+    debug!("PQ Public Key: {:?}", pq_pk_vec);
 
 
 
@@ -808,6 +815,8 @@ async fn main() -> Result<()> {
                 config.agent.contact_ip.as_ref(),
                 config.agent.contact_port,
                 pq_pk_vec.clone(),
+                pq_algorithm,
+
             )
             .await?
         } else {
@@ -829,6 +838,7 @@ async fn main() -> Result<()> {
                 config.agent.contact_ip.as_ref(),
                 config.agent.contact_port,
                 pq_pk_vec.clone(),
+                pq_algorithm,
             )
             .await?
         };
@@ -847,15 +857,23 @@ async fn main() -> Result<()> {
         let mackey = general_purpose::STANDARD.encode(key.value());
 
         // auth_tag is the HMAC of the agent UUID using U-Key
-        let auth_tag =
-            crypto::compute_hmac(mackey.as_bytes(), agent_uuid.as_bytes())?;
+        let auth_tag = crypto::compute_hmac(mackey.as_bytes(), agent_uuid.as_bytes())?;
         let auth_tag = hex::encode(&auth_tag);
 
         //info!("AUTH TAG: {}", auth_tag);
-        let challenge_sig = auth_tag.as_bytes();
+        let challenge_sig = match get_pq_signature_for_auth_tag(&auth_tag) {
+            Ok(sig) => sig,
+            Err(e) => {
+                error!("Kernel PQ-signature module failure: {:?}", e);
+                return Err(Error::Other(format!(
+                    "Kernel PQ-signature module failure: {:?}",
+                    e
+                )));
+            }
+        };
         // print_type_of(&challenge_sig);
-        // info!("Computed mldsa-87 signature over auth tag");
-        // debug!("Size of mldsa-87 signature over auth tag: {} B", challenge_sig.len()); // should be 4627 B for MLdsa-87
+        info!("Computed PQ signature over auth tag");
+        debug!("Size of PQ signature over auth tag: {} B", challenge_sig.len()); // should be 4627 B for MLdsa-87
        // info!("PQ SIGNATURE OVER AUTH TAG: {:?}", challenge_sig);
         registrar_agent::do_activate_agent(
             config.agent.registrar_ip.as_ref(),
@@ -1164,6 +1182,49 @@ async fn main() -> Result<()> {
  * to handle error in result, it is good to keep this function separate from
  * the main function.
  */
+
+ fn get_pq_signature_for_auth_tag(auth_tag_str: &str) -> Result<Vec<u8>> {
+    const DEV_PATH: &str = "/dev/qubip_auth.tag";
+    const SIG_PATH: &str = "/proc/qubip_auth.tag.sig";
+
+    // 1) Write the quote to /dev/ (kernel signs it)
+    let mut dev = OpenOptions::new()
+        .write(true)
+        .open(DEV_PATH)
+        .map_err(|e| {
+            Error::Other(format!(
+                "FATAL: cannot open {} for PQ signing – kernel module missing or wrong permissions: {}",
+                DEV_PATH, e
+            ))
+    })?;
+
+    dev.write_all(auth_tag_str.as_bytes())
+        .map_err(|e| {
+            Error::Other(format!(
+                "FATAL: Failed to write auth tag to {} - kernel module may be unloaded: {}",
+                DEV_PATH, e
+            ))
+        })?;
+
+    // 2) Read the resulting PQ signature from /proc/qubip_auth.tag.sig
+    let sig = read(SIG_PATH).map_err(|e| {
+        Error::Other(format!(
+            "FATAL: Failed to read PQ signature from {} - module not functioning: {}",
+            SIG_PATH, e
+        ))
+    })?;
+
+    if sig.is_empty() {
+        return Err(Error::Other(format!(
+            "FATAL: PQ signature from {} is empty – invalid module response",
+            SIG_PATH
+        )));
+    }
+
+    debug!("PQ signature length: {} bytes", sig.len());
+    Ok(sig)
+}
+
 fn read_in_file(path: String) -> std::io::Result<String> {
     let file = fs::File::open(path)?;
     let mut buf_reader = BufReader::new(file);

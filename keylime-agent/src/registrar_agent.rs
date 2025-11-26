@@ -152,6 +152,7 @@ pub(crate) async fn do_register_agent(
     ip: &str,
     port: u32,
     pq_key: Vec<u8>, // &[u8] and Vec<u8> are the only data structure that have 2592 B for public key (actual size for MLDSA-87)
+    pq_algorithm: &str,
 ) -> crate::error::Result<Vec<u8>> {
     let mtls_cert = match mtls_cert_x509 {
         Some(cert) => Some(crate::crypto::x509_to_pem(cert)?),
