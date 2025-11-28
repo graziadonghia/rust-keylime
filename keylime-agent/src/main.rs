@@ -768,13 +768,26 @@ async fn main() -> Result<()> {
             pq_pub_path.display()
         )));
     }
+
+    // --- NUOVO: Lettura del certificato PQ (ebano-cert.der) ---
+    let pq_cert_path = Path::new("/var/lib/keylime/ebano-cert.der"); // Assumiamo percorso relativo o config
+    let pq_cert_vec = match read(pq_cert_path) {
+        Ok(content) => {
+            debug!("Loaded PQ Certificate from {}", pq_cert_path.display());
+            content
+        },
+        Err(e) => {
+            warn!("Could not load PQ Certificate from {}: {}. Sending empty vector.", pq_cert_path.display(), e);
+            Vec::new()
+        }
+    };
+
     // should be a string with the algorithm name
     let pq_algorithm = "ML-DSA-87";
     debug!("PQ Algorithm: {:?}", pq_algorithm);
     debug!("Loaded PQ public key from {}", pq_pub_path.display());
     debug!("Size of PQ public key: {} B", pq_pk_vec.len()); // should be 2592 B for MLdsa-87
-    debug!("PQ Public Key: {:?}", pq_pk_vec);
-
+    debug!("Size of PQ Certificate: {} B", pq_cert_vec.len()); 
 
 
     {
@@ -816,7 +829,7 @@ async fn main() -> Result<()> {
                 config.agent.contact_port,
                 pq_pk_vec.clone(),
                 pq_algorithm,
-
+                pq_cert_vec.clone(), // NUOVO ARGOMENTO
             )
             .await?
         } else {
@@ -839,6 +852,7 @@ async fn main() -> Result<()> {
                 config.agent.contact_port,
                 pq_pk_vec.clone(),
                 pq_algorithm,
+                pq_cert_vec.clone(), // NUOVO ARGOMENTO
             )
             .await?
         };

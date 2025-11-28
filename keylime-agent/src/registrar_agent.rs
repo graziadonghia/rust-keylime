@@ -55,6 +55,8 @@ struct Register<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     port: Option<u32>,
     pq_key: Vec<u8>,
+    pq_algorithm: String,
+    pq_cert: Vec<u8>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -153,6 +155,7 @@ pub(crate) async fn do_register_agent(
     port: u32,
     pq_key: Vec<u8>, // &[u8] and Vec<u8> are the only data structure that have 2592 B for public key (actual size for MLDSA-87)
     pq_algorithm: &str,
+    pq_cert: Vec<u8>,
 ) -> crate::error::Result<Vec<u8>> {
     let mtls_cert = match mtls_cert_x509 {
         Some(cert) => Some(crate::crypto::x509_to_pem(cert)?),
@@ -189,9 +192,12 @@ pub(crate) async fn do_register_agent(
         ip,
         port: Some(port),
         pq_key: pq_key,
+        pq_algorithm: pq_algorithm.to_string(),
+        pq_cert: pq_cert,
     };
 
-    debug!("Send MLDSA-87 public key to the registrar");
+    debug!("Send PQ public key to the registrar, algorithm: {}", pq_algorithm);
+    debug!("Send PQ certificate to the registrar");
 
     let remote_ip = match registrar_ip.parse::<IpAddr>() {
         Ok(addr) => {
