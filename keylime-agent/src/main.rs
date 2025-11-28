@@ -743,21 +743,21 @@ async fn main() -> Result<()> {
     }
 
 
-    // --- NUOVO: Lettura del certificato PQ (ebano-cert.der) ---
-    let pq_cert_path = Path::new("/var/lib/keylime/ebano-cert.der"); // Assumiamo percorso relativo o config
+    // retrieve pq algorithm and certificate from config
+    let pq_cert_path = Path::new(&config.agent.pq_cert);
     let pq_cert_vec = match read(pq_cert_path) {
         Ok(content) => {
             debug!("Loaded PQ Certificate from {}", pq_cert_path.display());
             content
         },
         Err(e) => {
-            warn!("Could not load PQ Certificate from {}: {}. Sending empty vector.", pq_cert_path.display(), e);
+            error!("Could not load PQ Certificate from {}: {}. Sending empty vector.", pq_cert_path.display(), e);
             Vec::new()
         }
     };
 
     // should be a string with the algorithm name
-    let pq_algorithm = "ML-DSA-87";
+    let pq_algorithm = &config.agent.pq_algorithm;
     debug!("PQ Algorithm: {:?}", pq_algorithm);
     debug!("Size of PQ Certificate: {} B", pq_cert_vec.len()); 
 

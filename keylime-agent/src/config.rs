@@ -33,6 +33,8 @@ pub static DEFAULT_ENABLE_AGENT_MTLS: bool = true;
 pub static DEFAULT_KEYLIME_DIR: &str = "/var/lib/keylime";
 pub static DEFAULT_SERVER_KEY: &str = "server-private.pem";
 pub static DEFAULT_SERVER_CERT: &str = "server-cert.crt";
+pub static DEFAULT_PQ_ALGORITHM: &str = "ML-DSA-87";
+pub static DEFAULT_PQ_CERT: &str = "pq-cert.pem";
 pub static DEFAULT_IAK_CERT: &str = "iak-cert.crt";
 pub static DEFAULT_IDEVID_CERT: &str = "idevid-cert.crt";
 pub static DEFAULT_SERVER_KEY_PASSWORD: &str = "";
@@ -90,6 +92,8 @@ pub(crate) struct EnvConfig {
     pub keylime_dir: Option<String>,
     pub server_key: Option<String>,
     pub server_cert: Option<String>,
+    pub pq_algorithm: Option<String>,
+    pub pq_cert: Option<String>,
     pub iak_cert: Option<String>,
     pub idevid_cert: Option<String>,
     pub server_key_password: Option<String>,
@@ -140,6 +144,8 @@ pub(crate) struct AgentConfig {
     pub keylime_dir: String,
     pub server_key: String,
     pub server_cert: String,
+    pub pq_algorithm: String,
+    pub pq_cert: String,
     pub iak_cert: String,
     pub idevid_cert: String,
     pub server_key_password: String,
@@ -226,6 +232,12 @@ impl EnvConfig {
         }
         if let Some(ref v) = self.server_cert {
             _ = agent.insert("server_cert".to_string(), v.to_string().into());
+        }
+        if let Some(ref v) = self.pq_algorithm {
+            _ = agent.insert("pq_algorithm".to_string(), v.to_string().into());
+        }
+        if let Some(ref v) = self.pq_cert {
+            _ = agent.insert("pq_cert".to_string(), v.to_string().into());
         }
         if let Some(ref v) = self.iak_cert {
             _ = agent.insert("iak_cert".to_string(), v.to_string().into());
@@ -451,6 +463,14 @@ impl Source for KeylimeConfig {
             self.agent.server_cert.to_string().into(),
         );
         _ = m.insert(
+            "pq_algorithm".to_string(),
+            self.agent.pq_algorithm.to_string().into(),
+        );
+        _ = m.insert(
+            "pq_cert".to_string(),
+            self.agent.pq_cert.to_string().into(),
+        );
+        _ = m.insert(
             "iak_cert".to_string(),
             self.agent.iak_cert.to_string().into(),
         );
@@ -631,6 +651,8 @@ impl Default for AgentConfig {
             server_key: "default".to_string(),
             server_key_password: DEFAULT_SERVER_KEY_PASSWORD.to_string(),
             server_cert: "default".to_string(),
+            pq_algorithm: DEFAULT_PQ_ALGORITHM.to_string(),
+            pq_cert: "default".to_string(),
             iak_cert: "default".to_string(),
             idevid_cert: "default".to_string(),
             trusted_client_ca: "default".to_string(),
@@ -821,6 +843,18 @@ fn config_translate_keywords(
         DEFAULT_SERVER_CERT,
     );
 
+    let mut pq_algorithm = config.agent.pq_algorithm.clone();
+    if pq_algorithm == "default" {
+        pq_algorithm = DEFAULT_PQ_ALGORITHM.to_string();
+    }
+
+    let mut pq_cert = config_get_file_path(
+        "pq_cert",
+        &config.agent.pq_cert,
+        keylime_dir,
+        DEFAULT_PQ_CERT,
+    );
+
     let trusted_client_ca: String =
         parse_list(&config.agent.trusted_client_ca)?
             .iter()
@@ -907,6 +941,8 @@ fn config_translate_keywords(
             revocation_cert,
             server_cert,
             server_key,
+            pq_algorithm,
+            pq_cert,
             trusted_client_ca,
             uuid,
             ..config.agent.clone()
