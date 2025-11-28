@@ -75,8 +75,6 @@ pub(crate) struct KeylimeQuote {
 pub(crate) struct PQquote {
     pub pq_wrap_signature: Vec<u8>, 
     pub pq_wrap_signature_len: usize,
-    pub pq_key: Vec<u8>, 
-    pub pq_key_len: usize,
     pub hash_alg_sphincs: String,
     pub quote_len: usize,
     pub quote: String,              
@@ -241,8 +239,6 @@ pub async fn identity(
     let pq_quote = PQquote {
         pq_wrap_signature: pq_sig.clone(),
         pq_wrap_signature_len: pq_sig.len(),
-        pq_key: data.pq_pub_key.to_vec(),
-        pq_key_len: data.pq_pub_key_len,
         hash_alg_sphincs: "shake_256".to_string(),
         quote_len: quote.quote.len(),
         quote: quote.quote,
@@ -490,8 +486,6 @@ pub async fn integrity(
     let pq_quote = PQquote {
         pq_wrap_signature: pq_sig.clone(),
         pq_wrap_signature_len: pq_sig.len(),
-        pq_key: data.pq_pub_key.to_vec(),
-        pq_key_len: data.pq_pub_key.len(),
         hash_alg_sphincs: "shake_256".to_string(),
         quote_len: quote.quote.len(),
         quote: quote.quote,
@@ -505,8 +499,7 @@ pub async fn integrity(
     };
     // Printing each field
     info!("Size of quote = {} bytes", size_of::<PQquote>().to_string());
-    info!("Size of MLDSA-87 signature = {} bytes", pq_quote.pq_wrap_signature_len.to_string());
-    info!("MLDSA-87 Key Length = {} bytes", pq_quote.pq_key_len.to_string());
+    info!("Size of PQ signature = {} bytes", pq_quote.pq_wrap_signature_len.to_string());
     info!("Quote Length = {} bytes", pq_quote.quote_len.to_string());
     let response = JsonWrapper::success(pq_quote);
     info!("GET integrity quote returning 200 response");

@@ -156,8 +156,6 @@ pub struct QuoteData {
     measuredboot_ml_file: Option<Mutex<fs::File>>,
     ima_ml: Mutex<MeasurementList>,
     secure_mount: PathBuf,
-    pq_pub_key: Vec<u8>,
-    pq_pub_key_len: usize,
 
 }
 
@@ -744,30 +742,6 @@ async fn main() -> Result<()> {
         warn!("mTLS disabled, Tenant and Verifier will reach out to agent via HTTP");
     }
 
-    
-    // PQ public key retrieval from binary file /proc/qubip_mldsa87.pub.bin (ALREADY GENERATED)
-    let pq_pub_path = Path::new("/proc/qubip_mldsa87.pub.bin");
-    let mut pq_pk_file = fs::File::open(pq_pub_path).map_err(|e| {
-        Error::Configuration(format!(
-            "Failed to open PQ public key file at {}: {}",
-            pq_pub_path.display(),
-            e
-        ))
-    })?;
-    let mut pq_pk_vec = Vec::new();
-    let bytes_read = pq_pk_file.read_to_end(&mut pq_pk_vec).map_err(|e| {
-        Error::Configuration(format!(
-            "Failed to read PQ public key file at {}: {}",
-            pq_pub_path.display(),
-            e
-        ))
-    })?;
-    if bytes_read == 0 {
-        return Err(Error::Configuration(format!(
-            "PQ public key file at {} is empty",
-            pq_pub_path.display()
-        )));
-    }
 
     // --- NUOVO: Lettura del certificato PQ (ebano-cert.der) ---
     let pq_cert_path = Path::new("/var/lib/keylime/ebano-cert.der"); // Assumiamo percorso relativo o config
@@ -785,8 +759,6 @@ async fn main() -> Result<()> {
     // should be a string with the algorithm name
     let pq_algorithm = "ML-DSA-87";
     debug!("PQ Algorithm: {:?}", pq_algorithm);
-    debug!("Loaded PQ public key from {}", pq_pub_path.display());
-    debug!("Size of PQ public key: {} B", pq_pk_vec.len()); // should be 2592 B for MLdsa-87
     debug!("Size of PQ Certificate: {} B", pq_cert_vec.len()); 
 
 
@@ -827,7 +799,6 @@ async fn main() -> Result<()> {
                 mtls_cert,
                 config.agent.contact_ip.as_ref(),
                 config.agent.contact_port,
-                pq_pk_vec.clone(),
                 pq_algorithm,
                 pq_cert_vec.clone(), // NUOVO ARGOMENTO
             )
@@ -850,7 +821,6 @@ async fn main() -> Result<()> {
                 mtls_cert,
                 config.agent.contact_ip.as_ref(),
                 config.agent.contact_port,
-                pq_pk_vec.clone(),
                 pq_algorithm,
                 pq_cert_vec.clone(), // NUOVO ARGOMENTO
             )
@@ -970,8 +940,6 @@ async fn main() -> Result<()> {
         measuredboot_ml_file,
         ima_ml: Mutex::new(MeasurementList::new()),
         secure_mount: PathBuf::from(&mount),
-        pq_pub_key: pq_pk_vec,
-        pq_pub_key_len: 1024,
     });
 
     let actix_server =

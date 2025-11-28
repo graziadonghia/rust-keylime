@@ -54,7 +54,6 @@ struct Register<'a> {
     ip: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     port: Option<u32>,
-    pq_key: Vec<u8>,
     pq_algorithm: String,
     pq_cert: Vec<u8>,
 }
@@ -153,7 +152,6 @@ pub(crate) async fn do_register_agent(
     mtls_cert_x509: Option<&X509>,
     ip: &str,
     port: u32,
-    pq_key: Vec<u8>, // &[u8] and Vec<u8> are the only data structure that have 2592 B for public key (actual size for MLDSA-87)
     pq_algorithm: &str,
     pq_cert: Vec<u8>,
 ) -> crate::error::Result<Vec<u8>> {
@@ -191,7 +189,6 @@ pub(crate) async fn do_register_agent(
         mtls_cert,
         ip,
         port: Some(port),
-        pq_key: pq_key,
         pq_algorithm: pq_algorithm.to_string(),
         pq_cert: pq_cert,
     };
