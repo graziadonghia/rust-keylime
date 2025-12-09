@@ -357,7 +357,8 @@ pub async fn integrity(
         "Calling Integrity Quote with nonce: {}, mask: {}",
         param.nonce, param.mask
     );
-
+    // measure time elapsed for quote generation
+    let start = std::time::Instant::now();
     // If an index was provided, the request is for the entries starting from the given index
     // (iterative attestation). Otherwise the request is for the whole list.
     let nth_entry = match &param.ima_ml_entry {
@@ -389,6 +390,8 @@ pub async fn integrity(
             );
         }
     };
+    let duration = start.elapsed(); 
+    debug!("TPM Quote obtained successfully in {:?} ms", duration.as_millis());
 
     let id_quote = KeylimeQuote {
         quote: tpm_quote,
@@ -435,6 +438,8 @@ pub async fn integrity(
         _ => (),
     }
 
+    debug!("Generating measurement list");
+    let start = std::time::Instant::now();
     // Generate the measurement list
     let (ima_measurement_list, ima_measurement_list_entry, num_entries) =
         if let Some(ima_file) = &data.ima_ml_file {
@@ -459,7 +464,8 @@ pub async fn integrity(
         } else {
             (None, None, None)
         };
-
+        let duration = start.elapsed();
+    debug!("Measurement list generated successfully in {:?} ms. Number of entries: {:?}", duration.as_millis(), num_entries);
     // Generate the final quote based on the ID quote
     let quote = KeylimeQuote {
         pubkey,
@@ -468,7 +474,9 @@ pub async fn integrity(
         ima_measurement_list_entry,
         ..id_quote
     };
-
+    debug!("Final quote generated successfully");
+    debug!("Generating PQ signature for quote");
+    let start = std::time::Instant::now();
     let pq_sig = match get_pq_signature_for_quote(&quote.quote) {
         Ok(sig) => sig,
         Err(e) => {
@@ -481,8 +489,9 @@ pub async fn integrity(
             );
         }
     };
+    let duration = start.elapsed();
 
-
+    debug!("PQ signature generated successfully in {:?} ms", duration.as_millis());
     let pq_quote = PQquote {
         pq_wrap_signature: pq_sig.clone(),
         pq_wrap_signature_len: pq_sig.len(),
