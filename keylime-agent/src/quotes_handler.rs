@@ -21,25 +21,8 @@ use std::{
 use std::fs::OpenOptions;
 use std::io::Write;
 use tss_esapi::structures::PcrSlot;
+use crate::benchmark;
 
-use std::os::raw::{c_char, c_uchar, c_ulong};
-use std::ffi::CString;
-
-#[link(name = "sign_with_sphincs")]
-extern "C" {
-    fn sign_with_sphincs(
-        quote: *const u8,
-        quote_len: usize,
-        pq_priv_key: *const u8,
-        pq_priv_key_len: usize,
-    ) -> SignatureResult;
-}
-
-#[repr(C)]
-struct SignatureResult {
-    signature: *mut c_uchar,
-    signature_len: c_ulong,
-}
 
 #[derive(Deserialize)]
 pub struct Ident {
@@ -73,9 +56,9 @@ pub(crate) struct KeylimeQuote {
 
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub(crate) struct PQquote {
+    pub pq_algorithm: String,
     pub pq_wrap_signature: Vec<u8>, 
     pub pq_wrap_signature_len: usize,
-    pub hash_alg_sphincs: String,
     pub quote_len: usize,
     pub quote: String,              
     pub hash_alg: String,           
@@ -237,9 +220,9 @@ pub async fn identity(
 
 
     let pq_quote = PQquote {
+        pq_algorithm: data.pq_algorithm.clone(),
         pq_wrap_signature: pq_sig.clone(),
         pq_wrap_signature_len: pq_sig.len(),
-        hash_alg_sphincs: "shake_256".to_string(),
         quote_len: quote.quote.len(),
         quote: quote.quote,
         hash_alg: quote.hash_alg,
@@ -357,8 +340,7 @@ pub async fn integrity(
         "Calling Integrity Quote with nonce: {}, mask: {}",
         param.nonce, param.mask
     );
-    // measure time elapsed for quote generation
-    let start = std::time::Instant::now();
+
     // If an index was provided, the request is for the entries starting from the given index
     // (iterative attestation). Otherwise the request is for the whole list.
     let nth_entry = match &param.ima_ml_entry {
@@ -371,6 +353,11 @@ pub async fn integrity(
     let mut context = data.tpmcontext.lock().unwrap(); //#[allow_ci]
 
     // Generate the ID quote.
+
+    // --------------------------------------------
+    // 1. TPM quote
+    // --------------------------------------------
+    let tpm_start = std::time::Instant::now();
     let tpm_quote = match context.quote(
         param.nonce.as_bytes(),
         mask,
@@ -390,9 +377,8 @@ pub async fn integrity(
             );
         }
     };
-    let duration = start.elapsed(); 
-    debug!("TPM Quote obtained successfully in {:?} ms", duration.as_millis());
-
+    let tpm_duration_ms = tpm_start.elapsed().as_millis();
+    debug!("TPM quote generated successfully in {:?} ms", tpm_duration_ms);
     let id_quote = KeylimeQuote {
         quote: tpm_quote,
         hash_alg: data.hash_alg.to_string(),
@@ -438,8 +424,11 @@ pub async fn integrity(
         _ => (),
     }
 
+    // --------------------------------------------
+    // 2. IMA measurement list
+    // --------------------------------------------
     debug!("Generating measurement list");
-    let start = std::time::Instant::now();
+    let ima_start = std::time::Instant::now();
     // Generate the measurement list
     let (ima_measurement_list, ima_measurement_list_entry, num_entries) =
         if let Some(ima_file) = &data.ima_ml_file {
@@ -464,8 +453,11 @@ pub async fn integrity(
         } else {
             (None, None, None)
         };
-        let duration = start.elapsed();
-    debug!("Measurement list generated successfully in {:?} ms. Number of entries: {:?}", duration.as_millis(), num_entries);
+
+    let ima_read_duration_ms = ima_start.elapsed().as_millis();
+    debug!("Measurement list generated successfully in {:?} ms. Number of entries: {:?}", ima_read_duration_ms, num_entries);
+    let ima_count_metric = num_entries.unwrap_or(0);
+
     // Generate the final quote based on the ID quote
     let quote = KeylimeQuote {
         pubkey,
@@ -475,8 +467,11 @@ pub async fn integrity(
         ..id_quote
     };
     debug!("Final quote generated successfully");
+    // --------------------------------------------
+    // 3. PQ wrap
+    // --------------------------------------------
     debug!("Generating PQ signature for quote");
-    let start = std::time::Instant::now();
+    let pq_start = std::time::Instant::now();
     let pq_sig = match get_pq_signature_for_quote(&quote.quote) {
         Ok(sig) => sig,
         Err(e) => {
@@ -489,13 +484,12 @@ pub async fn integrity(
             );
         }
     };
-    let duration = start.elapsed();
+    let pq_duration_ms = pq_start.elapsed().as_millis();
 
-    debug!("PQ signature generated successfully in {:?} ms", duration.as_millis());
     let pq_quote = PQquote {
+        pq_algorithm: data.pq_algorithm.clone(),
         pq_wrap_signature: pq_sig.clone(),
         pq_wrap_signature_len: pq_sig.len(),
-        hash_alg_sphincs: "shake_256".to_string(),
         quote_len: quote.quote.len(),
         quote: quote.quote,
         hash_alg: quote.hash_alg,
@@ -506,6 +500,21 @@ pub async fn integrity(
         mb_measurement_list: quote.mb_measurement_list.clone(),
         ima_measurement_list_entry: quote.ima_measurement_list_entry,
     };
+    
+    debug!("PQ signature generated successfully in {:?} ms", pq_duration_ms);
+    // --------------------------------------------
+    // 4. Log benchmark metrics
+    // --------------------------------------------
+    let classical_alg = data.sign_alg.to_string();
+    let pq_alg = data.pq_algorithm.to_string();
+    benchmark::log_metric(
+        tpm_duration_ms,
+        ima_read_duration_ms,
+        pq_duration_ms,
+        ima_count_metric,
+        &classical_alg,
+        &pq_alg,
+    );
     // Printing each field
     info!("Size of quote = {} bytes", size_of::<PQquote>().to_string());
     info!("Size of PQ signature = {} bytes", pq_quote.pq_wrap_signature_len.to_string());

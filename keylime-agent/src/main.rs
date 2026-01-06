@@ -46,6 +46,7 @@ mod revocation;
 mod secure_mount;
 mod serialization;
 mod version_handler;
+mod benchmark;
 
 use actix_web::{dev::Service, http, middleware, rt, web, App, HttpServer};
 use base64::{engine::general_purpose, Engine as _};
@@ -105,27 +106,6 @@ use quantcrypt::dsas::DsaAlgorithm;
 use quantcrypt::dsas::DsaKeyGenerator;
 use quantcrypt::keys::PrivateKey;
 
-// Generate PQ keypair
-#[link(name = "gen_keypair")]
-extern "C" {
-    fn generate_sphincs_keypair() -> KeypairResult;
-}
-
-
-#[repr(C)]
-struct KeypairResult {
-    public_key: *const u8,
-    public_key_len: size_t,
-    private_key: *const u8,
-    private_key_len: size_t,
-}
-
-#[repr(C)]
-struct SignatureResult {
-    signature: *mut c_uchar,
-    signature_len: c_ulong,
-}
-
 #[macro_use]
 extern crate static_assertions;
 
@@ -156,6 +136,7 @@ pub struct QuoteData {
     measuredboot_ml_file: Option<Mutex<fs::File>>,
     ima_ml: Mutex<MeasurementList>,
     secure_mount: PathBuf,
+    pq_algorithm: String,
 
 }
 
@@ -940,6 +921,8 @@ async fn main() -> Result<()> {
         measuredboot_ml_file,
         ima_ml: Mutex::new(MeasurementList::new()),
         secure_mount: PathBuf::from(&mount),
+        pq_algorithm: pq_algorithm.clone(),
+
     });
 
     let actix_server =
@@ -1357,6 +1340,7 @@ mod testing {
                 measuredboot_ml_file,
                 ima_ml: Mutex::new(MeasurementList::new()),
                 secure_mount,
+                pq_algorithm: "ml-dsa-87".to_string(), // default value for testing
             })
         }
     }
