@@ -57,6 +57,7 @@ use std::{
     fs::{read, read_to_string},
     io::Seek,
 };
+use std::time::{SystemTime, UNIX_EPOCH, Instant};
 use error::{Error, Result};
 use futures::{
     future::{ok, TryFutureExt},
@@ -490,7 +491,7 @@ async fn main() -> Result<()> {
         "hash_ek" => ek_hash.clone(),
         s => s.to_string(),
     };
-
+    
     let agent_uuid = config.agent.uuid.clone();
 
     // Try to load persistent Agent data
@@ -741,10 +742,16 @@ async fn main() -> Result<()> {
     let pq_algorithm = &config.agent.pq_algorithm;
     debug!("PQ Algorithm: {:?}", pq_algorithm);
     debug!("Size of PQ Certificate: {} B", pq_cert_vec.len()); 
-
+    let total_reg_start = Instant::now();
+    // Variables to store our metrics
+    let mut net_reg_ms: u128 = 0;
+    let mut tpm_activate_ms: u128 = 0;
+    let mut pq_sign_us: u128 = 0;
+    let mut net_activate_ms: u128 = 0;
 
     {
         // Request keyblob material
+        let reg_start = Instant::now();
         let keyblob = if config.agent.enable_iak_idevid {
             let (Some(iak), Some(idevid), Some(attest), Some(signature)) =
                 (iak, idevid, attest, signature)
@@ -807,14 +814,18 @@ async fn main() -> Result<()> {
             )
             .await?
         };
+        net_reg_ms = reg_start.elapsed().as_millis();
 
         info!("SUCCESS: Agent {} registered", &agent_uuid);
+        // measure TPM hardware activation
         info!("Starting Activate Credentials protocol");
+        let tpm_start = Instant::now();
         let key = ctx.activate_credential(
             keyblob,
             ak_handle,
             ek_result.key_handle,
         )?;
+        tpm_activate_ms = tpm_start.elapsed().as_millis();
         // Flush EK if we created it
         if config.agent.ek_handle.is_empty() {
             ctx.as_mut().flush_context(ek_result.key_handle.into())?;
@@ -826,6 +837,8 @@ async fn main() -> Result<()> {
         let auth_tag = hex::encode(&auth_tag);
 
         //info!("AUTH TAG: {}", auth_tag);
+        // measure pq signing
+        let sign_start = Instant::now();
         let challenge_sig = match get_pq_signature_for_auth_tag(&auth_tag) {
             Ok(sig) => sig,
             Err(e) => {
@@ -837,9 +850,13 @@ async fn main() -> Result<()> {
             }
         };
         // print_type_of(&challenge_sig);
+        pq_sign_us = sign_start.elapsed().as_micros();
         info!("Computed PQ signature over auth tag");
         debug!("Size of PQ signature over auth tag: {} B", challenge_sig.len()); // should be 4627 B for MLdsa-87
        // info!("PQ SIGNATURE OVER AUTH TAG: {:?}", challenge_sig);
+       // measure activation RTT (includes auth tag verification on registrar side)
+       let act_start = Instant::now();
+
         registrar_agent::do_activate_agent(
             config.agent.registrar_ip.as_ref(),
             config.agent.registrar_port,
@@ -849,11 +866,26 @@ async fn main() -> Result<()> {
             
         )
         .await?;
+        net_activate_ms = act_start.elapsed().as_millis();
         info!("SUCCESS: Agent {} activated", &agent_uuid);
-
-
     }
 
+    let total_reg_ms = total_reg_start.elapsed().as_millis();
+    info!("Registration and Activation performance metrics (in ms):");
+    info!("  Network Registration time: {}", net_reg_ms);
+    info!("  TPM ActivateCredential time: {}", tpm_activate_ms);
+    info!("  PQ Signature time (us): {}", pq_sign_us);
+    info!("  Network Activation time: {}", net_activate_ms);
+    info!("  Total Registration and Activation time: {}", total_reg_ms);
+    // log to CSV
+    benchmark::log_registration(
+        pq_sign_us,
+        tpm_activate_ms,
+        net_reg_ms,
+        net_activate_ms,
+        total_reg_ms,
+        pq_algorithm
+    );
     /* AGENT REGISTRATION DONE */
 
     let (mut payload_tx, mut payload_rx) =
