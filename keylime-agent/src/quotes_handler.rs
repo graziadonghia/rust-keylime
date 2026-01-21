@@ -19,6 +19,8 @@ use std::{
     io::{Read, Seek},
 };
 use std::fs::OpenOptions;
+use std::sync::atomic::Ordering;
+
 use std::io::Write;
 use tss_esapi::structures::PcrSlot;
 use crate::benchmark;
@@ -484,7 +486,8 @@ pub async fn integrity(
             );
         }
     };
-    let pq_duration_ms = pq_start.elapsed().as_millis();
+    // express duration in microseconds
+    let pq_duration_us = pq_start.elapsed().as_micros();
 
     let pq_quote = PQquote {
         pq_algorithm: data.pq_algorithm.clone(),
@@ -500,21 +503,32 @@ pub async fn integrity(
         mb_measurement_list: quote.mb_measurement_list.clone(),
         ima_measurement_list_entry: quote.ima_measurement_list_entry,
     };
-    
-    debug!("PQ signature generated successfully in {:?} ms", pq_duration_ms);
+
+    debug!("PQ signature generated successfully in {:?} us", pq_duration_us);
     // --------------------------------------------
     // 4. Log benchmark metrics
     // --------------------------------------------
+
+    // increment the atomic counter
+    let current_cycle = data.request_counter.fetch_add(1, Ordering::SeqCst) + 1;
+    info!("Remote attestation cycle count: {}", current_cycle);
+
+
     let classical_alg = data.sign_alg.to_string();
     let pq_alg = data.pq_algorithm.to_string();
     benchmark::log_metric(
+        current_cycle,
         tpm_duration_ms,
         ima_read_duration_ms,
-        pq_duration_ms,
+        pq_duration_us,
         ima_count_metric,
         &classical_alg,
         &pq_alg,
     );
+    // [Optional] Log info to console so you know when 1000 is reached
+    if current_cycle == 1000 {
+        info!("*** TEST COMPLETE: 1000 Cycles Reached ***");
+    }
     // Printing each field
     info!("Size of quote = {} bytes", size_of::<PQquote>().to_string());
     info!("Size of PQ signature = {} bytes", pq_quote.pq_wrap_signature_len.to_string());

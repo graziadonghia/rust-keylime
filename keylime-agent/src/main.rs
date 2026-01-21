@@ -49,6 +49,7 @@ mod version_handler;
 mod benchmark;
 
 use actix_web::{dev::Service, http, middleware, rt, web, App, HttpServer};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use base64::{engine::general_purpose, Engine as _};
 use clap::{Arg, Command as ClapApp};
 use common::*;
@@ -137,6 +138,7 @@ pub struct QuoteData {
     ima_ml: Mutex<MeasurementList>,
     secure_mount: PathBuf,
     pq_algorithm: String,
+    request_counter: AtomicUsize,
 
 }
 
@@ -922,6 +924,8 @@ async fn main() -> Result<()> {
         ima_ml: Mutex::new(MeasurementList::new()),
         secure_mount: PathBuf::from(&mount),
         pq_algorithm: pq_algorithm.clone(),
+        // initialize the remote attestation counter
+        request_counter: AtomicUsize::new(0),
 
     });
 
@@ -1341,6 +1345,7 @@ mod testing {
                 ima_ml: Mutex::new(MeasurementList::new()),
                 secure_mount,
                 pq_algorithm: "ml-dsa-87".to_string(), // default value for testing
+                request_counter: AtomicUsize::new(0),
             })
         }
     }
