@@ -56,3 +56,38 @@ pub fn log_metric(
         cycle, since_the_epoch, classical_alg, pq_alg, tpm_ms, ima_read_ms, pq_us, total_ms, ratio, ima_count, total_agent_latency_classical_ms, total_agent_latency_ms, tpm_quote_len, classical_pubkey_len, pq_pubkey_len, ima_log_len, pq_sig_len
     );
 }
+
+/// Appends a registration event to the CSV file.
+/// Columns: timestamp, pq_algo, pq_sign_us, tpm_activate_ms, net_reg_ms, net_activate_ms, total_ms
+pub fn log_registration(
+    pq_sign_us: u128,
+    tpm_activate_ms: u128,
+    net_reg_ms: u128,
+    net_activate_ms: u128,
+    total_ms: u128,
+    pq_alg: &str
+) {
+    let file_path = "/tmp/agent_registration.csv";
+    
+    let start = SystemTime::now();
+    let since_the_epoch = start.duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs();
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(file_path)
+        .expect("Unable to open registration CSV file");
+
+    if file.metadata().unwrap().len() == 0 {
+        let _ = writeln!(
+            file, 
+            "timestamp_unix,pq_alg,pq_sign_us,tpm_activate_ms,net_reg_ms,net_activate_ms,total_reg_ms"
+        );
+    }
+
+    let _ = writeln!(
+        file, 
+        "{},{},{},{},{},{},{}", 
+        since_the_epoch, pq_alg, pq_sign_us, tpm_activate_ms, net_reg_ms, net_activate_ms, total_ms
+    );
+}
