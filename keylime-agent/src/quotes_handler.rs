@@ -524,6 +524,13 @@ pub async fn integrity(
         ima_count_metric,
         &classical_alg,
         &pq_alg,
+        tpm_duration_ms + ima_read_duration_ms, // total latency for classical quote generation
+        tpm_duration_ms + ima_read_duration_ms + (pq_duration_us as f64 / 1000.0) as u128, // total latency for hybrid quote generation
+        pq_quote.quote_len,
+        pq_quote.pubkey.as_ref().map_or(0, |k| k.len()),
+        2592, // size of ML-DSA-87 public key in bytes
+        pq_quote.ima_measurement_list.as_ref().map_or(0, |m| m.len()),
+        pq_quote.pq_wrap_signature_len,
     );
     // [Optional] Log info to console so you know when 1000 is reached
     if current_cycle == 1000 {

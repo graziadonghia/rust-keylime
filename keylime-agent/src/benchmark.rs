@@ -11,7 +11,14 @@ pub fn log_metric(
     pq_us: u128, 
     ima_count: u64, 
     classical_alg: &str, 
-    pq_alg: &str
+    pq_alg: &str,
+    total_agent_latency_classical_ms: u128,
+    total_agent_latency_ms: u128,
+    tpm_quote_len: usize,
+    classical_pubkey_len: usize,
+    pq_pubkey_len: usize,
+    ima_log_len: usize,
+    pq_sig_len: usize,
 ) {
 
     let file_path = "/tmp/qubip_3_1_agent_metrics.csv";
@@ -31,22 +38,21 @@ pub fn log_metric(
     if file.metadata().unwrap().len() == 0 {
         let _ = writeln!(
             file, 
-            "cycle,timestamp_unix,classical_alg,pq_alg,tpm_quote_ms,ima_read_ms,pq_latency_us,total_hybrid_ms,ratio,ima_entries"
+            "cycle,timestamp_unix,classical_alg,pq_alg,tpm_quote_ms,ima_read_ms,pq_latency_us,total_hybrid_ms,ratio,ima_entries,total_agent_latency_classical_ms,total_agent_latency_ms,tpm_quote_len,classical_pubkey_len,pq_pubkey_len,ima_log_len,pq_sig_len,"
         );
     }
 
     // 4. Calculate Stats
     // Hybrid Time = TPM (Classical) + PQ Wrap
     let pq_ms = pq_us / 1000; // Convert microseconds to milliseconds
-    let total_hybrid_ms = tpm_ms as f64 + (pq_ms as f64 / 1000.0) ;
+    let total_ms = tpm_ms as f64 + (pq_ms as f64 / 1000.0) ;
     
     // Ratio = Hybrid / Classical
-    let ratio = if tpm_ms > 0 { total_hybrid_ms as f64 / tpm_ms as f64 } else { 0.0 };
-
-    // 5. Write data (Include cycle and total_hybrid_ms)
+    let ratio = if tpm_ms > 0 { total_ms / tpm_ms as f64 } else { 0.0 };
+    // 5. Write data (Include cycle and total_ms)
     let _ = writeln!(
         file, 
-        "{},{},{},{},{},{},{},{},{:.10},{}", 
-        cycle, since_the_epoch, classical_alg, pq_alg, tpm_ms, ima_read_ms, pq_us, total_hybrid_ms, ratio, ima_count
+        "{},{},{},{},{},{},{},{:.10},{:.10},{},{:.10},{:.10},{},{},{},{},{}", 
+        cycle, since_the_epoch, classical_alg, pq_alg, tpm_ms, ima_read_ms, pq_us, total_ms, ratio, ima_count, total_agent_latency_classical_ms, total_agent_latency_ms, tpm_quote_len, classical_pubkey_len, pq_pubkey_len, ima_log_len, pq_sig_len
     );
 }
