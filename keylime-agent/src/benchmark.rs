@@ -21,7 +21,7 @@ pub fn log_metric(
     pq_sig_len: usize,
 ) {
 
-    let file_path = "/tmp/qubip_GA_agent_metrics.csv";
+    let file_path = "/tmp/baseline_trym_metrics_attack.csv";
     
     // 1. Get high-precision timestamp (seconds as f64)
     let start = SystemTime::now();
