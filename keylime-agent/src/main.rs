@@ -843,15 +843,34 @@ async fn main() -> Result<()> {
         //info!("AUTH TAG: {}", auth_tag);
         // measure pq signing
         let sign_start = Instant::now();
-        let challenge_sig = match get_pq_signature_for_auth_tag_userspace(&auth_tag) {
-            Ok(sig) => sig,
-            Err(e) => {
-                error!("Kernel PQ-signature module failure: {:?}", e);
-                return Err(Error::Other(format!(
-                    "Kernel PQ-signature module failure: {:?}",
-                    e
-                )));
+        let challenge_sig = if pq_algorithm.to_lowercase().contains("ml-dsa") {
+            debug!("Routing ML-DSA signature request to Kernel module...");
+            match get_pq_signature_for_auth_tag_kernel(&auth_tag) {
+                Ok(sig) => sig,
+                Err(e) => {
+                    error!("Kernel PQ-signature module failure: {:?}", e);
+                    return Err(Error::Other(format!(
+                        "Kernel PQ-signature module failure: {:?}",
+                        e
+                    )));
+                }
             }
+        } else if pq_algorithm.to_lowercase().contains("slh-dsa") {
+            debug!("Routing SLH-DSA signature request to Userspace C signer...");
+            match get_pq_signature_for_auth_tag_userspace(&auth_tag) {
+                Ok(sig) => sig,
+                Err(e) => {
+                    error!("Userspace PQ-signature failure: {:?}", e);
+                    return Err(Error::Other(format!(
+                        "Userspace PQ-signature failure: {:?}",
+                        e
+                    )));
+                }
+            }
+        } else {
+            let err_msg = format!("Unsupported PQ algorithm for auth tag signing: {}", pq_algorithm);
+            error!("{}", err_msg);
+            return Err(Error::Configuration(err_msg));
         };
         // print_type_of(&challenge_sig);
         pq_sign_us = sign_start.elapsed().as_micros();
