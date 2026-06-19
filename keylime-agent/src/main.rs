@@ -108,6 +108,8 @@ use quantcrypt::dsas::DsaAlgorithm;
 use quantcrypt::dsas::DsaKeyGenerator;
 use quantcrypt::keys::PrivateKey;
 
+use std::process::{Command, Stdio};
+
 #[macro_use]
 extern crate static_assertions;
 
@@ -841,7 +843,7 @@ async fn main() -> Result<()> {
         //info!("AUTH TAG: {}", auth_tag);
         // measure pq signing
         let sign_start = Instant::now();
-        let challenge_sig = match get_pq_signature_for_auth_tag(&auth_tag) {
+        let challenge_sig = match get_pq_signature_for_auth_tag_userspace(&auth_tag) {
             Ok(sig) => sig,
             Err(e) => {
                 error!("Kernel PQ-signature module failure: {:?}", e);
@@ -1175,16 +1177,67 @@ async fn main() -> Result<()> {
 }
 
 /*
- * Input: file path
- * Output: file content
- *
- * Helper function to help the keylime agent read file and get the file
- * content. It is not from the original python version. Because rust needs
- * to handle error in result, it is good to keep this function separate from
- * the main function.
+ * Generates the SLH-DSA signature by calling the external C signer.
+ * This keeps the private key completely out of the Rust agent's memory heap.
  */
+fn get_pq_signature_for_auth_tag_userspace(auth_tag_str: &str) -> Result<Vec<u8>> {
+    // Note: Update this path to wherever you store the compiled C binary.
+    debug!("Calling C code to perform SLH-DSA signature");
+    const SIGNER_BINARY_PATH: &str = "/usr/local/bin/pq_sign_tss";
 
- fn get_pq_signature_for_auth_tag(auth_tag_str: &str) -> Result<Vec<u8>> {
+    // Spawn the external C signer via sudo (inheriting the Aurora OpenSSL env via -E)
+    // Spawn the external C signer natively with explicit OpenSSL paths
+    let mut child = Command::new(SIGNER_BINARY_PATH)
+        // Explicitly inject the path to your Aurora provider so it never fails to load
+        .env("OPENSSL_MODULES", "/opt/quantumsafe/build/lib")
+        .env("OPENSSL_CONF", "/opt/quantumsafe/build/ssl/openssl.cnf")
+        .env("LD_LIBRARY_PATH", "/opt/quantumsafe/build/lib64:/opt/quantumsafe/build/lib")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            Error::Other(format!(
+                "FATAL: Failed to spawn external PQ signer {}: {}",
+                SIGNER_BINARY_PATH, e
+            ))
+        })?;
+
+    // Feed the auth tag payload into the C program's stdin
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(auth_tag_str.as_bytes()).map_err(|e| {
+            Error::Other(format!("FATAL: Failed to write to signer stdin: {}", e))
+        })?;
+    }
+
+    // Wait for the process to finish and collect the output
+    let output = child.wait_with_output().map_err(|e| {
+        Error::Other(format!("FATAL: Failed to wait for signer process: {}", e))
+    })?;
+
+    // Check if the C program exited successfully
+    if !output.status.success() {
+        let err_msg = String::from_utf8_lossy(&output.stderr);
+        error!("PQ Signer failed: {}", err_msg);
+        return Err(Error::Other(format!(
+            "FATAL: External PQ signer failed with error: {}",
+            err_msg
+        )));
+    }
+
+    let sig = output.stdout;
+
+    if sig.is_empty() {
+        return Err(Error::Other(
+            "FATAL: PQ signature returned from external signer is empty".to_string()
+        ));
+    }
+
+    debug!("PQ signature length: {} bytes", sig.len());
+    Ok(sig)
+}
+
+ fn get_pq_signature_for_auth_tag_kernel(auth_tag_str: &str) -> Result<Vec<u8>> {
     const DEV_PATH: &str = "/dev/qubip_auth.tag";
     const SIG_PATH: &str = "/proc/qubip_auth.tag.sig";
 
