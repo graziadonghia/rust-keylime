@@ -22,7 +22,7 @@
 
 #define PERSISTENT_HANDLE 0x81020004
 #define SK_SIZE 128
-#define MAX_PAYLOAD_SIZE 4096
+#define MAX_PAYLOAD_SIZE 1048576
 
 /* All errors MUST go to stderr so they don't corrupt the stdout signature stream */
 static void die_ossl(const char *m) { fprintf(stderr, "FATAL: %s\n", m); ERR_print_errors_fp(stderr); exit(1); }

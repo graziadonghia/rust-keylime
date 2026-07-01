@@ -12,6 +12,7 @@ use quantcrypt::dsas::DsaAlgorithm;
 use quantcrypt::dsas::DsaKeyGenerator;
 use quantcrypt::keys::PrivateKey;
 use std::any::Any;
+use std::process::{Command, Stdio};
 use log::*;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -77,7 +78,7 @@ pub(crate) struct PQquote {
 }
 
 // function to send quote to kernel for PQ wrap
-fn get_pq_signature_for_quote(quote_str: &str) -> Result<Vec<u8>, KeylimeError> {
+fn get_pq_signature_for_quote_kernel(quote_str: &str) -> Result<Vec<u8>, KeylimeError> {
     const DEV_PATH: &str = "/dev/qubip.quote";
     const SIG_PATH: &str = "/proc/qubip_pq_quote.sig.bin";
 
@@ -113,6 +114,55 @@ fn get_pq_signature_for_quote(quote_str: &str) -> Result<Vec<u8>, KeylimeError> 
             "FATAL: PQ signature from {} is empty – invalid module response",
             SIG_PATH
         )));
+    }
+
+    debug!("PQ signature length: {} bytes", sig.len());
+    Ok(sig)
+}
+
+fn get_pq_signature_for_quote_userspace(quote_str: &str) -> Result<Vec<u8>, KeylimeError> {
+    debug!("Routing SLH-DSA signature request to Userspace C signer...");
+    const SIGNER_BINARY_PATH: &str = "/usr/local/bin/pq_sign_tss";
+
+    let mut child = Command::new(SIGNER_BINARY_PATH)
+        .env("OPENSSL_MODULES", "/opt/quantumsafe/build/lib")
+        .env("OPENSSL_CONF", "/opt/quantumsafe/build/ssl/openssl.cnf")
+        .env("LD_LIBRARY_PATH", "/opt/quantumsafe/build/lib64:/opt/quantumsafe/build/lib")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            KeylimeError::Other(format!(
+                "FATAL: Failed to spawn external PQ signer {}: {}",
+                SIGNER_BINARY_PATH, e
+            ))
+        })?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(quote_str.as_bytes()).map_err(|e| {
+            KeylimeError::Other(format!("FATAL: Failed to write to signer stdin: {}", e))
+        })?;
+    }
+
+    let output = child.wait_with_output().map_err(|e| {
+        KeylimeError::Other(format!("FATAL: Failed to wait for signer process: {}", e))
+    })?;
+
+    if !output.status.success() {
+        let err_msg = String::from_utf8_lossy(&output.stderr);
+        error!("PQ Signer failed: {}", err_msg);
+        return Err(KeylimeError::Other(format!(
+            "FATAL: External PQ signer failed with error: {}",
+            err_msg
+        )));
+    }
+
+    let sig = output.stdout;
+    if sig.is_empty() {
+        return Err(KeylimeError::Other(
+            "FATAL: PQ signature returned from external signer is empty".to_string()
+        ));
     }
 
     debug!("PQ signature length: {} bytes", sig.len());
@@ -207,17 +257,30 @@ pub async fn identity(
     fn print_type_of<T>(_: &T) {
         debug!("{}", std::any::type_name::<T>());
     }
-    let pq_sig = match get_pq_signature_for_quote(&quote.quote) {
-        Ok(sig) => sig,
-        Err(e) => {
-            error!("Kernel PQ-wrap module failure: {:?}", e);
-            return HttpResponse::InternalServerError().json(
-                JsonWrapper::error(
-                    500,
-                    format!("Critical error: unable to perform PQ wrap – {}", e),
-                ),
-            );
+    let pq_sig = if data.pq_algorithm.to_lowercase().contains("ml-dsa") {
+        match get_pq_signature_for_quote_kernel(&quote.quote) {
+            Ok(sig) => sig,
+            Err(e) => {
+                error!("Kernel PQ-wrap module failure: {:?}", e);
+                return HttpResponse::InternalServerError().json(
+                    JsonWrapper::error(500, format!("Critical error: unable to perform PQ wrap – {}", e)),
+                );
+            }
         }
+    } else if data.pq_algorithm.to_lowercase().contains("slh-dsa") {
+        match get_pq_signature_for_quote_userspace(&quote.quote) {
+            Ok(sig) => sig,
+            Err(e) => {
+                error!("Userspace PQ-wrap module failure: {:?}", e);
+                return HttpResponse::InternalServerError().json(
+                    JsonWrapper::error(500, format!("Critical error: unable to perform PQ wrap – {}", e)),
+                );
+            }
+        }
+    } else {
+        return HttpResponse::InternalServerError().json(
+            JsonWrapper::error(500, format!("Unsupported PQ algorithm: {}", data.pq_algorithm)),
+        );
     };
 
 
@@ -474,17 +537,31 @@ pub async fn integrity(
     // --------------------------------------------
     debug!("Generating PQ signature for quote");
     let pq_start = std::time::Instant::now();
-    let pq_sig = match get_pq_signature_for_quote(&quote.quote) {
-        Ok(sig) => sig,
-        Err(e) => {
-            debug!("Unable to retrieve PQ signature for quote: {:?}", e);
-            return HttpResponse::InternalServerError().json(
-                JsonWrapper::error(
-                    500,
-                    "Unable to retrieve quote".to_string(),
-                ),
-            );
+    
+    let pq_sig = if data.pq_algorithm.to_lowercase().contains("ml-dsa") {
+        match get_pq_signature_for_quote_kernel(&quote.quote) {
+            Ok(sig) => sig,
+            Err(e) => {
+                debug!("Unable to retrieve PQ signature for quote via kernel: {:?}", e);
+                return HttpResponse::InternalServerError().json(
+                    JsonWrapper::error(500, "Unable to retrieve quote".to_string()),
+                );
+            }
         }
+    } else if data.pq_algorithm.to_lowercase().contains("slh-dsa") {
+        match get_pq_signature_for_quote_userspace(&quote.quote) {
+            Ok(sig) => sig,
+            Err(e) => {
+                debug!("Unable to retrieve PQ signature for quote via userspace: {:?}", e);
+                return HttpResponse::InternalServerError().json(
+                    JsonWrapper::error(500, "Unable to retrieve quote".to_string()),
+                );
+            }
+        }
+    } else {
+        return HttpResponse::InternalServerError().json(
+            JsonWrapper::error(500, format!("Unsupported PQ algorithm: {}", data.pq_algorithm)),
+        );
     };
     // express duration in microseconds
     let pq_duration_us = pq_start.elapsed().as_micros();
